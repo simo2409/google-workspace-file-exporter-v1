@@ -1,0 +1,240 @@
+"""
+Download files from Google Drive Workspace URLs.
+
+Usage:
+    python main.py <url1> [url2] ...
+
+Auth setup:
+    1. Create a Google Cloud project and enable the Drive API.
+    2. Download OAuth 2.0 credentials as 'credentials.json' in this directory.
+    3. On first run, a browser window will open for authorization.
+       The resulting token is cached in 'token.json'.
+"""
+
+import argparse
+import hashlib
+import io
+import json
+import re
+import sys
+from datetime import date
+from pathlib import Path
+
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
+
+SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
+CREDENTIALS_FILE = Path("credentials.json")
+TOKEN_FILE = Path("token.json")
+METADATA_FILE = "_metadata.json"
+
+# Google-native MIME types → (export MIME, extension)
+GOOGLE_EXPORT_MAP: dict[str, tuple[str, str]] = {
+    "application/vnd.google-apps.document": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".docx",
+    ),
+    "application/vnd.google-apps.spreadsheet": (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xlsx",
+    ),
+    "application/vnd.google-apps.presentation": (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".pptx",
+    ),
+    "application/vnd.google-apps.drawing": ("image/svg+xml", ".svg"),
+}
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+
+def get_credentials() -> Credentials:
+    creds: Credentials | None = None
+
+    if TOKEN_FILE.exists():
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            if not CREDENTIALS_FILE.exists():
+                sys.exit(
+                    "credentials.json not found. "
+                    "Download it from the Google Cloud Console (OAuth 2.0 client)."
+                )
+            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+            creds = flow.run_local_server(port=0)
+        TOKEN_FILE.write_text(creds.to_json())
+
+    return creds
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def extract_file_id(url: str) -> str | None:
+    patterns = [
+        r"/file/d/([a-zA-Z0-9_-]+)",
+        r"/d/([a-zA-Z0-9_-]+)",
+        r"[?&]id=([a-zA-Z0-9_-]+)",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, url)
+        if m:
+            return m.group(1)
+    return None
+
+
+def md5_of_file(path: Path) -> str:
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load_metadata(dest_dir: Path) -> dict:
+    meta_path = dest_dir / METADATA_FILE
+    if meta_path.exists():
+        return json.loads(meta_path.read_text())
+    return {}
+
+
+def save_metadata(dest_dir: Path, metadata: dict) -> None:
+    meta_path = dest_dir / METADATA_FILE
+    meta_path.write_text(json.dumps(metadata, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Download logic
+# ---------------------------------------------------------------------------
+
+
+def download_file(service, file_id: str, dest_dir: Path, metadata: dict) -> None:
+    try:
+        drive_meta = (
+            service.files()
+            .get(fileId=file_id, fields="id,name,mimeType,md5Checksum,modifiedTime")
+            .execute()
+        )
+    except HttpError as e:
+        print(f"  [ERROR] API error fetching metadata: {e}")
+        return
+
+    mime_type: str = drive_meta["mimeType"]
+    name: str = drive_meta["name"]
+    drive_md5: str | None = drive_meta.get("md5Checksum")
+    modified_time: str = drive_meta.get("modifiedTime", "")
+    is_native = mime_type.startswith("application/vnd.google-apps.")
+
+    # Determine filename and request type
+    if is_native:
+        export_info = GOOGLE_EXPORT_MAP.get(mime_type)
+        if not export_info:
+            print(f"  [SKIP] Unsupported Google type '{mime_type}' for '{name}'")
+            return
+        export_mime, ext = export_info
+        filename = name + ext
+        local_path = dest_dir / filename
+        request = service.files().export_media(fileId=file_id, mimeType=export_mime)
+    else:
+        filename = name
+        local_path = dest_dir / filename
+        request = service.files().get_media(fileId=file_id)
+
+    cached = metadata.get(file_id, {})
+
+    # Check whether we can safely skip the download
+    if local_path.exists():
+        if is_native:
+            # For Google-native files, modifiedTime is the only reliable signal
+            if cached.get("modifiedTime") == modified_time:
+                print(f"  [SKIP] '{filename}' unchanged (modifiedTime match)")
+                return
+            print(f"  [UPDATE] '{filename}' changed on Drive, re-downloading...")
+            local_path.unlink()
+        else:
+            if drive_md5:
+                local_md5 = md5_of_file(local_path)
+                if local_md5 == drive_md5:
+                    print(f"  [SKIP] '{filename}' unchanged (MD5 match)")
+                    return
+                print(f"  [UPDATE] '{filename}' MD5 mismatch, re-downloading...")
+                local_path.unlink()
+            else:
+                # No checksum available — cannot verify integrity, re-download
+                print(
+                    f"  [UPDATE] '{filename}' exists but Drive provides no checksum, re-downloading..."
+                )
+                local_path.unlink()
+
+    # Stream download
+    buf = io.BytesIO()
+    downloader = MediaIoBaseDownload(buf, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+        pct = int(status.progress() * 100) if status else 0
+        print(f"  Downloading '{filename}'... {pct}%", end="\r")
+
+    local_path.write_bytes(buf.getvalue())
+    print(f"  [OK] '{filename}' saved.          ")
+
+    # Update cached metadata
+    metadata[file_id] = {
+        "filename": filename,
+        "modifiedTime": modified_time,
+        "md5": drive_md5,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Download files from Google Drive Workspace URLs."
+    )
+    parser.add_argument("urls", nargs="+", help="Google Drive file URLs")
+    args = parser.parse_args()
+
+    today = date.today().isoformat()
+    dest_dir = Path("downloads") / today
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    creds = get_credentials()
+    service = build("drive", "v3", credentials=creds)
+
+    metadata = load_metadata(dest_dir)
+
+    for url in args.urls:
+        file_id = extract_file_id(url)
+        if not file_id:
+            print(f"[ERROR] Cannot extract file ID from: {url}")
+            continue
+        print(f"Processing {url}")
+        try:
+            download_file(service, file_id, dest_dir, metadata)
+        except Exception as e:
+            print(f"  [ERROR] {e}")
+        finally:
+            save_metadata(dest_dir, metadata)
+
+    print(f"\nDone. Files saved to: {dest_dir}/")
+
+
+if __name__ == "__main__":
+    main()
