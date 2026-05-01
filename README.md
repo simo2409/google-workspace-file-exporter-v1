@@ -2,6 +2,9 @@
 
 Downloads files from Google Drive URLs into a dated local folder, with smart change detection to avoid unnecessary re-downloads.
 
+## GitHub
+https://github.com/simo2409/google-workspace-file-exporter-v1
+
 ## What it does
 
 - Accepts a **location name** and one or more Google Drive URLs as arguments
