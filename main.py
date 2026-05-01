@@ -2,7 +2,9 @@
 Download files from Google Drive Workspace URLs.
 
 Usage:
-    python main.py <url1> [url2] ...
+    python main.py <location> <url1> [url2] ...
+
+    <location> must match a key defined in config.json.
 
 Auth setup:
     1. Create a Google Cloud project and enable the Drive API.
@@ -31,6 +33,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 CREDENTIALS_FILE = Path("credentials.json")
 TOKEN_FILE = Path("token.json")
+CONFIG_FILE = Path("config.json")
 METADATA_FILE = "_metadata.json"
 
 # Google-native MIME types → (export MIME, extension)
@@ -102,6 +105,32 @@ def md5_of_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def load_config() -> dict:
+    if not CONFIG_FILE.exists():
+        sys.exit(
+            "config.json not found. "
+            "Create it with a 'locations' key mapping names to paths."
+        )
+    try:
+        config = json.loads(CONFIG_FILE.read_text())
+    except json.JSONDecodeError as e:
+        sys.exit(f"config.json is not valid JSON: {e}")
+    if "locations" not in config or not isinstance(config["locations"], dict):
+        sys.exit("config.json must contain a 'locations' object.")
+    return config
+
+
+def resolve_location(config: dict, name: str) -> Path:
+    locations: dict = config["locations"]
+    if name not in locations:
+        known = ", ".join(f'"{k}"' for k in sorted(locations))
+        sys.exit(
+            f"Unknown location '{name}'. "
+            f"Available locations in config.json: {known}"
+        )
+    return Path(locations[name]).expanduser()
 
 
 def load_metadata(dest_dir: Path) -> dict:
@@ -208,11 +237,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Download files from Google Drive Workspace URLs."
     )
+    parser.add_argument("location", help="Destination location name (defined in config.json)")
     parser.add_argument("urls", nargs="+", help="Google Drive file URLs")
     args = parser.parse_args()
 
+    config = load_config()
+    base_dir = resolve_location(config, args.location)
+
     today = date.today().isoformat()
-    dest_dir = Path("downloads") / today
+    dest_dir = base_dir / today
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     creds = get_credentials()

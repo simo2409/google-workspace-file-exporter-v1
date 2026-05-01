@@ -4,8 +4,8 @@ Downloads files from Google Drive URLs into a dated local folder, with smart cha
 
 ## What it does
 
-- Accepts one or more Google Drive URLs as arguments
-- Saves files to `downloads/<YYYY-MM-DD>/` (folder named with today's date)
+- Accepts a **location name** and one or more Google Drive URLs as arguments
+- Saves files to `<location_path>/<YYYY-MM-DD>/` (folder named with today's date)
 - Skips re-downloading files whose content hasn't changed:
   - **Binary files** (PDF, images, etc.): compared via MD5 checksum provided by the Drive API
   - **Google-native files** (Docs, Sheets, Slides, Drawings): compared via `modifiedTime`
@@ -15,7 +15,7 @@ Downloads files from Google Drive URLs into a dated local folder, with smart cha
   - Google Sheets → `.xlsx`
   - Google Slides → `.pptx`
   - Google Drawings → `.svg`
-- Persists metadata in `downloads/<date>/_metadata.json` for future comparisons
+- Persists metadata in `<location_path>/<date>/_metadata.json` for future comparisons
 
 ## Setup
 
@@ -25,7 +25,22 @@ Downloads files from Google Drive URLs into a dated local folder, with smart cha
 uv sync
 ```
 
-### 2. Configure Google OAuth credentials
+### 2. Configure download locations
+
+Edit `config.json` to define named locations (arbitrary names pointing to local paths):
+
+```json
+{
+  "locations": {
+    "work": "~/Downloads/drive-exports/work",
+    "personal": "~/Downloads/drive-exports/personal"
+  }
+}
+```
+
+Add as many locations as needed. Paths support `~` expansion.
+
+### 3. Configure Google OAuth credentials
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a project (or select an existing one)
@@ -41,19 +56,27 @@ On the first run, a browser window will open asking you to authorize access to y
 ## Usage
 
 ```bash
-python main.py <url1> [url2] ...
+python main.py <location> <url1> [url2] ...
 ```
+
+`<location>` must match a key defined in `config.json`. The script exits with an error if the name is not found.
 
 **Examples:**
 
 ```bash
-# Single file
-python main.py "https://drive.google.com/file/d/FILE_ID/view"
+# Download a file to the "work" location
+python main.py work "https://drive.google.com/file/d/FILE_ID/view"
 
-# Multiple files
-python main.py \
+# Download multiple files to the "personal" location
+python main.py personal \
   "https://drive.google.com/file/d/ABC123/view" \
   "https://docs.google.com/spreadsheets/d/XYZ456/edit"
+```
+
+**Error if location is unknown:**
+
+```
+Unknown location 'finance'. Available locations in config.json: "personal", "work"
 ```
 
 ## Supported URL formats
@@ -67,10 +90,14 @@ python main.py \
 ## Output structure
 
 ```
-downloads/
-└── 2026-05-01/
-    ├── report.pdf
-    ├── budget.xlsx
-    ├── presentation.pptx
-    └── _metadata.json    ← internal, used for change detection
+~/Downloads/drive-exports/
+├── work/
+│   └── 2026-05-01/
+│       ├── report.pdf
+│       ├── budget.xlsx
+│       └── _metadata.json    ← internal, used for change detection
+└── personal/
+    └── 2026-05-01/
+        ├── presentation.pptx
+        └── _metadata.json
 ```
