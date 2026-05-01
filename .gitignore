@@ -18,3 +18,5 @@ config.json
 
 # Downloaded files
 downloads/
+
+.claude

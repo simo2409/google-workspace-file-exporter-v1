@@ -31,9 +31,11 @@ from googleapiclient.http import MediaIoBaseDownload
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
-CREDENTIALS_FILE = Path("credentials.json")
-TOKEN_FILE = Path("token.json")
-CONFIG_FILE = Path("config.json")
+_SCRIPT_DIR = Path(__file__).parent
+
+CREDENTIALS_FILE = _SCRIPT_DIR / "credentials.json"
+TOKEN_FILE = _SCRIPT_DIR / "token.json"
+CONFIG_FILE = _SCRIPT_DIR / "config.json"
 METADATA_FILE = "_metadata.json"
 
 # Google-native MIME types → (export MIME, extension)
@@ -175,38 +177,36 @@ def download_file(service, file_id: str, dest_dir: Path, metadata: dict) -> None
             return
         export_mime, ext = export_info
         filename = name + ext
-        local_path = dest_dir / filename
-        request = service.files().export_media(fileId=file_id, mimeType=export_mime)
     else:
         filename = name
-        local_path = dest_dir / filename
-        request = service.files().get_media(fileId=file_id)
 
+    local_path = dest_dir / filename
     cached = metadata.get(file_id, {})
 
-    # Check whether we can safely skip the download
-    if local_path.exists():
-        if is_native:
-            # For Google-native files, modifiedTime is the only reliable signal
-            if cached.get("modifiedTime") == modified_time:
-                print(f"  [SKIP] '{filename}' unchanged (modifiedTime match)")
-                return
+    # Check metadata first — works across days without requiring the file in today's dir
+    if is_native:
+        if cached.get("modifiedTime") == modified_time:
+            print(f"  [SKIP] '{filename}' unchanged (modifiedTime match)")
+            return
+        if cached:
             print(f"  [UPDATE] '{filename}' changed on Drive, re-downloading...")
-            local_path.unlink()
-        else:
+    else:
+        if drive_md5 and cached.get("md5") == drive_md5:
+            print(f"  [SKIP] '{filename}' unchanged (MD5 match)")
+            return
+        if cached:
             if drive_md5:
-                local_md5 = md5_of_file(local_path)
-                if local_md5 == drive_md5:
-                    print(f"  [SKIP] '{filename}' unchanged (MD5 match)")
-                    return
                 print(f"  [UPDATE] '{filename}' MD5 mismatch, re-downloading...")
-                local_path.unlink()
             else:
-                # No checksum available — cannot verify integrity, re-download
-                print(
-                    f"  [UPDATE] '{filename}' exists but Drive provides no checksum, re-downloading..."
-                )
-                local_path.unlink()
+                print(f"  [UPDATE] '{filename}' Drive provides no checksum, re-downloading...")
+
+    if local_path.exists():
+        local_path.unlink()
+
+    if is_native:
+        request = service.files().export_media(fileId=file_id, mimeType=export_mime)
+    else:
+        request = service.files().get_media(fileId=file_id)
 
     # Stream download
     buf = io.BytesIO()
@@ -251,7 +251,7 @@ def main() -> None:
     creds = get_credentials()
     service = build("drive", "v3", credentials=creds)
 
-    metadata = load_metadata(dest_dir)
+    metadata = load_metadata(base_dir)
 
     for url in args.urls:
         file_id = extract_file_id(url)
@@ -264,7 +264,7 @@ def main() -> None:
         except Exception as e:
             print(f"  [ERROR] {e}")
         finally:
-            save_metadata(dest_dir, metadata)
+            save_metadata(base_dir, metadata)
 
     print(f"\nDone. Files saved to: {dest_dir}/")
 
