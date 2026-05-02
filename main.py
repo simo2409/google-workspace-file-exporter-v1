@@ -8,9 +8,10 @@ Usage:
 
 Auth setup:
     1. Create a Google Cloud project and enable the Drive API.
-    2. Download OAuth 2.0 credentials as 'credentials.json' in this directory.
+    2. Download OAuth 2.0 credentials and save as:
+       ~/.config/llmwiki/obs-llmwiki-simone-personal-v1/credentials.json
     3. On first run, a browser window will open for authorization.
-       The resulting token is cached in 'token.json'.
+       The resulting token is cached in token-drive.json in the same directory.
 """
 
 import argparse
@@ -32,9 +33,10 @@ from googleapiclient.http import MediaIoBaseDownload
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 _SCRIPT_DIR = Path(__file__).parent
+_LLMWIKI_CONFIG_DIR = Path.home() / ".config" / "llmwiki" / "obs-llmwiki-simone-personal-v1"
 
-CREDENTIALS_FILE = _SCRIPT_DIR / "credentials.json"
-TOKEN_FILE = _SCRIPT_DIR / "token.json"
+CREDENTIALS_FILE = _LLMWIKI_CONFIG_DIR / "credentials.json"
+TOKEN_FILE = _LLMWIKI_CONFIG_DIR / "token-drive.json"
 CONFIG_FILE = _SCRIPT_DIR / "config.json"
 METADATA_FILE = "_metadata.json"
 
@@ -73,8 +75,9 @@ def get_credentials() -> Credentials:
         else:
             if not CREDENTIALS_FILE.exists():
                 sys.exit(
-                    "credentials.json not found. "
-                    "Download it from the Google Cloud Console (OAuth 2.0 client)."
+                    f"credentials.json not found at {CREDENTIALS_FILE}\n"
+                    "Download it from the Google Cloud Console (OAuth 2.0 client) "
+                    "and place it there (shared across all llmwiki utils)."
                 )
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)

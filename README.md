@@ -45,16 +45,24 @@ Add as many locations as needed. Paths support `~` expansion.
 
 ### 3. Configure Google OAuth credentials
 
+OAuth credentials are shared across all llmwiki utils and must be placed at:
+
+```
+~/.config/llmwiki/obs-llmwiki-simone-personal-v1/credentials.json
+```
+
+To obtain them:
+
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a project (or select an existing one)
 3. Enable the **Google Drive API** under *APIs & Services → Library*
 4. Go to *APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID*
 5. Choose **Desktop app** as the application type
-6. Download the JSON file and save it as `credentials.json` in this directory
+6. Download the JSON file and save it at the path above (create the directory if needed)
 
-On the first run, a browser window will open asking you to authorize access to your Drive. The resulting token is cached in `token.json` and reused automatically in subsequent runs.
+On the first run, a browser window will open asking you to authorize access to your Drive. The resulting token is cached at `~/.config/llmwiki/obs-llmwiki-simone-personal-v1/token-drive.json` and reused automatically in subsequent runs.
 
-> `credentials.json` and `token.json` are listed in `.gitignore` and must never be committed.
+> Credentials and tokens live outside this repository and must never be committed.
 
 ## Usage
 
